@@ -12,6 +12,7 @@ typedef struct {
 static CFMutableDictionaryRef liveConnections;
 static int debug;
 static CFStringRef requiredDeviceId;
+static char requiredProcessName[256];
 static void (*printMessage)(int fd, const char *, size_t);
 static void (*printSeparator)(int fd);
 
@@ -32,6 +33,45 @@ static inline void write_fully(int fd, const void *buffer, size_t length)
 static inline void write_string(int fd, const char *string)
 {
     write_fully(fd, string, strlen(string));
+}
+
+static int find_space_offsets(const char *buffer, size_t length, size_t *space_offsets_out)
+{
+    int o = 0;
+    for (size_t i = 16; i < length; i++) {
+        if (buffer[i] == ' ') {
+            space_offsets_out[o++] = i;
+            if (o == 3) {
+                break;
+            }
+        }
+    }
+    return o;
+}
+static unsigned char should_print_message(const char *buffer, size_t length)
+{
+    if (length < 3) return 0; // don't want blank lines
+    
+    size_t space_offsets[3];
+    find_space_offsets(buffer, length, space_offsets);
+    
+    // Check whether process name matches the one passed to -p option and filter if needed
+    if (strlen(requiredProcessName)) {
+        char processName[256];
+        memset(processName, '\0', 256);
+        memcpy(processName, buffer + space_offsets[0] + 1, space_offsets[1] - space_offsets[0]);
+        for (int i=strlen(processName); i!=0; i--)
+            if (processName[i]=='[')
+                processName[i]='\0';
+        
+        if (strcmp(processName, requiredProcessName)!=0)
+            return 0;
+    }
+    
+    // More filtering options can be added here and return 0 when they won't meed filter criteria
+    
+    return 1;
+    
 }
 
 #define write_const(fd, text) write_fully(fd, text, sizeof(text)-1)
@@ -61,16 +101,10 @@ static void write_colored(int fd, const char *buffer, size_t length)
         return;
     }
     size_t space_offsets[3];
-    int o = 0;
-    for (size_t i = 16; i < length; i++) {
-        if (buffer[i] == ' ') {
-            space_offsets[o++] = i;
-            if (o == 3) {
-                break;
-            }
-        }
-    }
+    int o = find_space_offsets(buffer, length, space_offsets);
+    
     if (o == 3) {
+        
         // Log date and device name
         write_const(fd, COLOR_DARK_WHITE);
         write_fully(fd, buffer, space_offsets[0]);
@@ -166,8 +200,12 @@ static void SocketCallback(CFSocketRef s, CFSocketCallBackType type, CFDataRef a
         while ((buffer[extentLength] != '\0') && extentLength != length) {
             extentLength++;
         }
-        printMessage(1, buffer, extentLength);
-        printSeparator(1);
+        
+        if (should_print_message(buffer, extentLength)) {
+            printMessage(1, buffer, extentLength);
+            printSeparator(1);
+        }
+        
         length -= extentLength;
         buffer += extentLength;
     }
@@ -290,18 +328,29 @@ int main (int argc, char * const argv[])
                 "\nControl-C to disconnect\n"
                 "Mail bug reports and suggestions to <ryan.petrich@medialets.com>\n",
                 argv[0]);
+        // TODO: merge up:
+        fprintf(stderr, "Usage: %s [options]\nOptions:\n -d\t\t\tInclude connect/disconnect messages in standard out\n -u <udid>\t\tShow only logs from a specific device\n -p <process name>\tShow only logs from a specific process\n\nControl-C to disconnect\nMail bug reports and suggestions to <ryan.petrich@medialets.com>\n", argv[0]);
         return 1;
     }
     int c;
     bool use_separators = false;
-    // petrich:
-    while ((c = getopt(argc, argv, "dsu:")) != -1)
+ 
+    // old petrich:
+    // while ((c = getopt(argc, argv, "dsu:")) != -1)
     // pontillo:
     // while ((c = getopt(argc, argv, "dxt:u:")) != -1)
+    //HEAD:
+    bool force_color = false;
+    memset(requiredProcessName, '\0', 256);
+    while ((c = getopt(argc, argv, "dcsu:p:")) != -1)
+//end HEAD.
         switch (c)
     {
         case 'd':
             debug = 1;
+            break;
+        case 'c':
+            force_color = true;
             break;
         case 's':
             use_separators = true;
@@ -316,6 +365,8 @@ int main (int argc, char * const argv[])
             break;
         case 'x':
             exitAfterTimeout = 1;
+        case 'p':
+            strcpy(requiredProcessName, optarg);
             break;
         case '?':
             if (optopt == 'u' || optopt == 't')
@@ -328,7 +379,7 @@ int main (int argc, char * const argv[])
         default:
             abort();
     }
-    if (isatty(1)) {
+    if (force_color || isatty(1)) {
         printMessage = &write_colored;
         printSeparator = use_separators ? &color_separator : &no_separator;
     } else {
