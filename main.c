@@ -4,6 +4,7 @@
 #include <sys/stat.h>
 #include <pwd.h>
 #include <CoreFoundation/CoreFoundation.h>
+#include <regex.h>
 #include "MobileDevice.h"
 
 #include "extern.h"
@@ -21,6 +22,8 @@ static bool force_color = false;
 static char *simulatorLogPath;
 static CFStringRef requiredDeviceId;
 static char *requiredProcessName;
+static char *requiredRegexPattern;
+static regex_t requiredRegex;
 static void (*printMessage)(int fd, const char *, size_t);
 static void (*printSeparator)(int fd);
 
@@ -82,6 +85,15 @@ static unsigned char should_print_message(const char *buffer, size_t length)
             return 0;
         }
         free(processName);
+    }
+
+    // Check whether message matches regex filter
+    if (requiredRegexPattern != NULL) {
+        int status = regnexec(&requiredRegex, buffer, length, 0, NULL, 0);
+        if (status != 0) {
+            // Not a match
+            return 0;
+        }
     }
     
     // More filtering options can be added here and return 0 when they won't meed filter criteria
@@ -432,6 +444,7 @@ int main (int argc, char * const argv[])
         {"udid", required_argument, NULL, 'u'},
         {"simulator", required_argument, NULL, 's'},
         {"process", required_argument, NULL, 'p'},
+        {"regex", required_argument, NULL, 'r'},
         {"help", no_argument, NULL, 'h'},
         {"debug", no_argument, (int*)&debug, 1},
         {"use-separators", no_argument, (int*)&use_separators, 1},
@@ -441,7 +454,7 @@ int main (int argc, char * const argv[])
     
     int option_index = 0;
     
-    while((c = getopt_long(argc, argv, "u:s:p:", long_options, &option_index)) != -1){
+    while((c = getopt_long(argc, argv, "u:s:p:r:", long_options, &option_index)) != -1){
         switch (c){
             case 0:
                 break;
@@ -468,6 +481,22 @@ int main (int argc, char * const argv[])
 
                 strcpy(requiredProcessName, optarg);
                 break;
+            case 'r':
+            {
+                requiredRegexPattern = malloc(strlen(optarg) + 1);
+                requiredRegexPattern[strlen(optarg)] = '\0';
+
+                strcpy(requiredRegexPattern, optarg);
+
+                int status = regcomp(&requiredRegex, requiredRegexPattern, REG_EXTENDED);
+                if (status != 0) {
+                    char errorMessage[2048];
+                    regerror(status, &requiredRegex, errorMessage, 2048);
+                    fprintf(stderr, "Error: Regex error compiling '%s': %s\n", requiredRegexPattern, errorMessage);
+                    return 1;
+                }
+                break;
+            }
             case 'h':
             case '?':
                 goto usage;
@@ -506,6 +535,16 @@ int main (int argc, char * const argv[])
     return 0;
     
 usage:
-    fprintf(stderr, "Usage: %s [options]\nOptions:\n --udid <udid>          Show only logs from a specific device\n --simulator <version>  Show logs from iOS Simulator\n --debug                Include connect/disconnect messages in standard out\n --use-separators       Skip a line between each line.\n --process              Filter by process name.\n --force-color          Force colored text.\nControl-C to disconnect\nMail bug reports and suggestions to <ryan.petrich@medialets.com>\n", argv[0]);
+    fprintf(stderr,
+            "Usage: %s [options]\nOptions:\n"
+            " --udid <udid>          Show only logs from a specific device\n"
+            " --simulator <version>  Show logs from iOS Simulator\n"
+            " --debug                Include connect/disconnect messages in standard out\n"
+            " --use-separators       Skip a line between each line.\n"
+            " --process              Filter by process name.\n"
+            " --regex                Filter by regular expression.\n"
+            " --force-color          Force colored text.\n"
+            "Control-C to disconnect\n"
+            "Mail bug reports and suggestions to <ryan.petrich@medialets.com>\n", argv[0]);
     return 1;
 }
