@@ -12,7 +12,7 @@ typedef struct {
 static CFMutableDictionaryRef liveConnections;
 static int debug;
 static CFStringRef requiredDeviceId;
-static char *requiredProcessName;
+static char *requiredProcessNames;
 static void (*printMessage)(int fd, const char *, size_t);
 static void (*printSeparator)(int fd);
 
@@ -45,6 +45,28 @@ static int find_space_offsets(const char *buffer, size_t length, size_t *space_o
     }
     return o;
 }
+
+static bool comma_separated_string_contains(const char *to_find, const char *separated_string)
+{
+	char *token, *string, *tofree;
+
+	tofree = string = strdup(separated_string);
+	if (!string)
+		return false;
+
+	bool found = false;
+	while ((token = strsep(&string, ",")) != NULL) {
+		if (strcmp(to_find, token) == 0) {
+			found = true;
+			break;
+		}
+	}
+
+	free(tofree);
+
+	return found;
+}
+
 static unsigned char should_print_message(const char *buffer, size_t length)
 {
     if (length < 3) return 0; // don't want blank lines
@@ -53,7 +75,7 @@ static unsigned char should_print_message(const char *buffer, size_t length)
     find_space_offsets(buffer, length, space_offsets);
     
     // Check whether process name matches the one passed to -p option and filter if needed
-    if (requiredProcessName != NULL) {
+    if (requiredProcessNames != NULL) {
         int nameLength = space_offsets[1] - space_offsets[0]; //This size includes the NULL terminator.
         
         char *processName = malloc(nameLength);
@@ -64,7 +86,7 @@ static unsigned char should_print_message(const char *buffer, size_t length)
             if (processName[i] == '[')
                 processName[i] = '\0';
         
-        if (strcmp(processName, requiredProcessName) != 0){
+        if (!comma_separated_string_contains(processName, requiredProcessNames)){
             free(processName);
             return 0;
         }
@@ -307,10 +329,10 @@ int main (int argc, char * const argv[])
             requiredDeviceId = CFStringCreateWithCString(kCFAllocatorDefault, optarg, kCFStringEncodingASCII);
             break;
         case 'p':
-            requiredProcessName = malloc(strlen(optarg) + 1);
-            requiredProcessName[strlen(optarg)] = '\0';
+            requiredProcessNames = malloc(strlen(optarg) + 1);
+            requiredProcessNames[strlen(optarg)] = '\0';
 
-            strcpy(requiredProcessName, optarg);
+            strcpy(requiredProcessNames, optarg);
             break;
         case '?':
             if (optopt == 'u')
